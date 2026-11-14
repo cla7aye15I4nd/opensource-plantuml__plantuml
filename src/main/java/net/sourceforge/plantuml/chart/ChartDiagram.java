@@ -34,16 +34,24 @@
  */
 package net.sourceforge.plantuml.chart;
 
+import java.io.IOException;
+import java.io.OutputStream;
+import java.io.PrintStream;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 
+import net.sourceforge.plantuml.FileFormat;
 import net.sourceforge.plantuml.FileFormatOption;
 import net.sourceforge.plantuml.TitledDiagram;
+import net.sourceforge.plantuml.api.ImageDataSimple;
+import net.sourceforge.plantuml.chart.txt.ChartTxt;
 import net.sourceforge.plantuml.command.CommandExecutionResult;
 import net.sourceforge.plantuml.core.DiagramDescription;
 import net.sourceforge.plantuml.core.DiagramType;
+import net.sourceforge.plantuml.core.ImageData;
 import net.sourceforge.plantuml.core.UmlSource;
 import net.sourceforge.plantuml.klimt.drawing.UGraphic;
 import net.sourceforge.plantuml.klimt.font.StringBounder;
@@ -53,6 +61,7 @@ import net.sourceforge.plantuml.klimt.geom.XDimension2D;
 import net.sourceforge.plantuml.klimt.geom.XPoint2D;
 import net.sourceforge.plantuml.klimt.shape.TextBlock;
 import net.sourceforge.plantuml.preproc.PreprocessingArtifact;
+import net.sourceforge.plantuml.security.SecurityUtils;
 
 public class ChartDiagram extends TitledDiagram {
 
@@ -126,12 +135,30 @@ public class ChartDiagram extends TitledDiagram {
 	}
 
 	private PieRenderer getPieRenderer() {
-		return new PieRenderer(getSkinParam(), series.get(0), angularLabels, legendPosition);
+		return new PieRenderer(getSkinParam(), resolvePie());
 	}
 
 	private RadarRenderer getRadarRenderer() {
-		return new RadarRenderer(getSkinParam(), getRadarCategories(), getRadarValues(), series, getRadialAxis(),
-				radarCircleGrid, legendPosition);
+		return new RadarRenderer(getSkinParam(), resolveRadar());
+	}
+
+	/**
+	 * The pie, its slices resolved: see {@link PieChart}.
+	 */
+	public PieChart resolvePie() {
+		return new PieChart(series.get(0), angularLabels, legendPosition);
+	}
+
+	/**
+	 * The radar, its categories, values and scale resolved: see {@link RadarChart}.
+	 */
+	public RadarChart resolveRadar() {
+		return new RadarChart(getRadarCategories(), getRadarValues(), series, getRadialAxis(), radarCircleGrid,
+				legendPosition);
+	}
+
+	public Kind getKind() {
+		return kind;
 	}
 
 	// The categories around a radar: the a-axis labels, else the keys of the first series
@@ -190,34 +217,38 @@ public class ChartDiagram extends TitledDiagram {
 	}
 
 	private ChartRenderer getRenderer() {
-		// For horizontal orientation, use h-axis data where vertical mode uses y-axis,
-		// and vice versa
-		// User writes: v-axis [labels], h-axis numeric
-		// For horizontal bars: xAxis=numeric (horizontal), yAxisLabels=categories
-		// (vertical)
-		// We need to pass to renderer properly based on what it expects
+		return new ChartRenderer(getSkinParam(), resolveCartesian());
+	}
+
+	/**
+	 * The chart as it is drawn on cartesian axes, every implicit value resolved: see
+	 * {@link CartesianChart}.
+	 */
+	public CartesianChart resolveCartesian() {
 		final ChartAxis hAxis = getHAxis();
 		if (orientation == Orientation.HORIZONTAL) {
-			// For horizontal: pass h-axis numeric as yAxis, v-axis labels as xAxisLabels
-			// This way bars grow along the correct axis
-			final ChartAxis valueAxis = hasCoordinatePairs() ? hAxis : getValueAxis(xAxis, false);
-			return new ChartRenderer(getSkinParam(), getCategories(yAxisLabels), yAxis.getTitle(), null,
-					xAxisLabelPosition, series, hAxis, valueAxis, null, legendPosition, yGridMode, xGridMode, stackMode,
-					orientation, annotations);
+			// The categories are given by the v-axis and go down the left side, the
+			// values go along the bottom, against the h-axis range. The grid modes are
+			// swapped: "v-axis [A, B] grid" gives one line per category
+			final List<String> categories = getCategories(yAxisLabels);
+			final List<ChartSeries> resolved = alignKeys(categories);
+			final ChartAxis valueAxis = hasCoordinatePairs() ? hAxis : getValueAxis(xAxis, false, resolved);
+			return new CartesianChart(orientation, categories, yAxis.getTitle(), null, xAxisLabelPosition, hAxis,
+					resolved, valueAxis, null, legendPosition, yGridMode, xGridMode, stackMode, annotations);
 		}
 
-		// For vertical: h-axis=categories (xAxisLabels), v-axis=numeric (yAxis)
-		// Use xAxis title if available (for coordinate-pair mode), otherwise use
-		// xAxisTitle
+		// Vertical: the categories (h-axis) along the bottom, the values (v-axis) on the
+		// left. The h-axis title is the one given with a range, else with the labels
 		final String hAxisTitle = (xAxis != null && xAxis.getTitle() != null && !xAxis.getTitle().isEmpty())
 				? xAxis.getTitle()
 				: xAxisTitle;
 		// A numeric h-axis range (h-axis 0 --> 10) is kept as it is
 		final List<String> categories = xAxis.isAutoScale() ? getCategories(xAxisLabels) : xAxisLabels;
-		return new ChartRenderer(getSkinParam(), categories, hAxisTitle, xAxisTickSpacing, xAxisLabelPosition,
-				getPlottedSeries(), hAxis, getValueAxis(yAxis, false), y2Axis == null ? null : getValueAxis(y2Axis, true),
-				legendPosition, xGridMode, yGridMode, stackMode, orientation,
-				annotations);
+		final List<ChartSeries> resolved = alignKeys(categories);
+		return new CartesianChart(orientation, categories, hAxisTitle, xAxisTickSpacing, xAxisLabelPosition, hAxis,
+				getPlottedSeries(resolved), getValueAxis(yAxis, false, resolved),
+				y2Axis == null ? null : getValueAxis(y2Axis, true, resolved), legendPosition, xGridMode, yGridMode,
+				stackMode, annotations);
 	}
 
 	// When no range is given for a value axis, it is fitted to the values drawn against it
@@ -225,17 +256,23 @@ public class ChartDiagram extends TitledDiagram {
 	// than while the series are added: a "v2-axis" line may come after the series using it,
 	// and stacked bars and areas reach the sum of their values, not each value.
 	// Series are drawn against y2Axis when they ask for it and it exists, as ChartRenderer does
-	private ChartAxis getValueAxis(ChartAxis axis, boolean secondary) {
+	private ChartAxis getValueAxis(ChartAxis axis, boolean secondary, List<ChartSeries> series) {
 		if (axis.isAutoScale() == false)
 			return axis;
 
 		double min = Double.POSITIVE_INFINITY;
 		double max = Double.NEGATIVE_INFINITY;
-		// Running totals per index: positive and negative stacked bars grow apart from 0,
-		// areas are always stacked on each other
-		final List<Double> barUp = new ArrayList<>();
-		final List<Double> barDown = new ArrayList<>();
-		final List<Double> areaTotal = new ArrayList<>();
+		// Stacked bars and areas reach the top of their stack (see StackLayout)
+		final List<ChartSeries> bars = new ArrayList<>();
+		final List<ChartSeries> areas = new ArrayList<>();
+		for (ChartSeries s : series)
+			if ((s.isUseSecondaryAxis() && y2Axis != null) == secondary)
+				if (s.getType() == ChartSeries.SeriesType.BAR)
+					bars.add(s);
+				else if (s.getType() == ChartSeries.SeriesType.AREA)
+					areas.add(s);
+		final StackLayout barStack = StackLayout.bars(bars);
+		final StackLayout areaStack = StackLayout.areas(areas);
 		for (ChartSeries s : series) {
 			if ((s.isUseSecondaryAxis() && y2Axis != null) != secondary)
 				continue;
@@ -246,9 +283,9 @@ public class ChartDiagram extends TitledDiagram {
 					continue;
 				final double reached;
 				if (s.getType() == ChartSeries.SeriesType.AREA)
-					reached = addAt(areaTotal, i, value);
+					reached = areaStack.getTop(areas.indexOf(s), i);
 				else if (s.getType() == ChartSeries.SeriesType.BAR && stackMode == StackMode.STACKED)
-					reached = addAt(value >= 0 ? barUp : barDown, i, value);
+					reached = barStack.getTop(bars.indexOf(s), i);
 				else
 					reached = value;
 				min = Math.min(min, reached);
@@ -305,30 +342,76 @@ public class ChartDiagram extends TitledDiagram {
 				+ t * t * t * c.getY2();
 	}
 
-	private static double addAt(List<Double> totals, int index, double value) {
-		while (totals.size() <= index)
-			totals.add(0.0);
-		final double result = totals.get(index) + value;
-		totals.set(index, result);
-		return result;
-	}
-
 	// When no labels are given for the category axis (h-axis, or v-axis for a horizontal
-	// chart), index-based data is drawn against the categories 1, 2, ..., n, n being the
-	// number of values in the longest series, as if "h-axis [1, 2, ..., n]" had been written
+	// chart), the categories are the keys of the first series with keys, then the keys of the
+	// next ones not seen yet, as for a radar. Index-based data is drawn against them, then
+	// against 2, 3, ..., n, n being the number of values in the longest series without keys:
+	// with no keys at all, as if "h-axis [1, 2, ..., n]" had been written
 	private List<String> getCategories(List<String> labels) {
 		if (!labels.isEmpty() || series.isEmpty() || series.get(0).hasExplicitXValues())
 			return labels;
 
+		final List<String> categories = new ArrayList<>();
+		for (ChartSeries s : series)
+			if (s.hasKeys())
+				for (String key : s.getKeys())
+					if (categories.contains(key) == false)
+						categories.add(key);
+
 		int count = 0;
 		for (ChartSeries s : series)
-			count = Math.max(count, s.getValues().size());
+			if (s.hasKeys() == false)
+				count = Math.max(count, s.getValues().size());
 
-		final List<String> categories = new ArrayList<>();
-		for (int i = 1; i <= count; i++)
+		for (int i = categories.size() + 1; i <= count; i++)
 			categories.add(Integer.toString(i));
 
 		return categories;
+	}
+
+	// The series with their keyed values put in the order of the categories, a category
+	// missing from a series being a missing value: [Feb: 20, Jan: 10] on h-axis [Jan, Feb, Mar]
+	// is drawn as [10, 20, ]. The other series are kept as they are
+	private List<ChartSeries> alignKeys(List<String> categories) {
+		final List<ChartSeries> result = new ArrayList<>();
+		for (ChartSeries s : series) {
+			if (s.hasKeys() == false) {
+				result.add(s);
+				continue;
+			}
+			final List<Double> values = new ArrayList<>();
+			for (int i = 0; i < categories.size(); i++)
+				values.add(null);
+			for (int i = 0; i < s.getValues().size(); i++) {
+				final int index = categories.indexOf(s.getKeys().get(i));
+				if (index >= 0)
+					values.set(index, s.getValues().get(i));
+			}
+			result.add(s.withValues(values));
+		}
+		return result;
+	}
+
+	// The labels of the category axis: the h-axis, or the v-axis for a horizontal chart
+	private List<String> getCategoryLabels() {
+		return orientation == Orientation.HORIZONTAL ? yAxisLabels : xAxisLabels;
+	}
+
+	// The keys of a bar, line, area or scatter must be categories of the category axis, when
+	// its labels are given, and there must be categories: a vertical chart with an h-axis range
+	// has none. Returns an error, or null
+	private CommandExecutionResult checkCartesianKeys(ChartSeries s, List<String> labels) {
+		if (s.hasKeys() == false)
+			return null;
+		if (orientation == Orientation.VERTICAL && xAxis.isAutoScale() == false)
+			return CommandExecutionResult
+					.error("Keyed values (key: value) need h-axis categories, not an h-axis range");
+		if (labels.isEmpty() == false)
+			for (String key : s.getKeys())
+				if (labels.contains(key) == false)
+					return CommandExecutionResult.error("\"" + key + "\" is not in "
+							+ (orientation == Orientation.HORIZONTAL ? "v-axis" : "h-axis"));
+		return null;
 	}
 
 	// When no h-axis range is given, coordinate-pair data is drawn against a numeric h-axis
@@ -357,7 +440,7 @@ public class ChartDiagram extends TitledDiagram {
 	// across the range, the first at the start and the last at the end, as if they had been
 	// written as coordinate pairs. The i-th value of every series is at the same x, n being the
 	// number of values in the longest series. A single value is drawn in the middle of the range
-	private List<ChartSeries> getPlottedSeries() {
+	private List<ChartSeries> getPlottedSeries(List<ChartSeries> series) {
 		if (xAxis.isAutoScale() || xAxisLabels.isEmpty() == false || series.isEmpty() || hasCoordinatePairs())
 			return series;
 
@@ -476,6 +559,13 @@ public class ChartDiagram extends TitledDiagram {
 			return CommandExecutionResult.error(
 					"Coordinate pair notation requires numeric h-axis (e.g., h-axis \"x\" -5 --> 5), not categorical labels");
 
+		if (orientation == Orientation.VERTICAL)
+			for (ChartSeries s : series) {
+				final CommandExecutionResult unknown = checkCartesianKeys(s, labels);
+				if (unknown != null)
+					return unknown;
+			}
+
 		this.xAxisLabels.clear();
 		this.xAxisLabels.addAll(labels);
 		return CommandExecutionResult.ok();
@@ -505,6 +595,12 @@ public class ChartDiagram extends TitledDiagram {
 		// Coordinate pairs given without a range have not been checked against one
 		if ((min != null || max != null) && xAxis.isAutoScale() && hasCoordinatePairs())
 			return CommandExecutionResult.error("h-axis range must be given before coordinate pair data");
+		if ((min != null || max != null) && orientation == Orientation.VERTICAL)
+			for (ChartSeries s : series)
+				if (s.hasKeys() && s.getType() != ChartSeries.SeriesType.PIE
+						&& s.getType() != ChartSeries.SeriesType.RADAR)
+					return CommandExecutionResult
+							.error("Keyed values (key: value) need h-axis categories, not an h-axis range");
 
 		if (title != null)
 			xAxis.setTitle(title);
@@ -530,6 +626,12 @@ public class ChartDiagram extends TitledDiagram {
 	}
 
 	public CommandExecutionResult setYAxisLabels(List<String> labels) {
+		if (orientation == Orientation.HORIZONTAL)
+			for (ChartSeries s : series) {
+				final CommandExecutionResult unknown = checkCartesianKeys(s, labels);
+				if (unknown != null)
+					return unknown;
+			}
 		this.yAxisLabels.clear();
 		this.yAxisLabels.addAll(labels);
 		return CommandExecutionResult.ok();
@@ -595,6 +697,9 @@ public class ChartDiagram extends TitledDiagram {
 				}
 			}
 		} else {
+			final CommandExecutionResult unknown = checkCartesianKeys(series, getCategoryLabels());
+			if (unknown != null)
+				return unknown;
 			// Index-based mode: ensure consistency
 			if (!this.series.isEmpty()) {
 				final boolean firstHasX = this.series.get(0).hasExplicitXValues();
@@ -684,6 +789,16 @@ public class ChartDiagram extends TitledDiagram {
 
 	public List<ChartAnnotation> getAnnotations() {
 		return annotations;
+	}
+
+	// ATXT and UTXT: see ChartTxt
+	@Override
+	protected ImageData exportTxt(OutputStream os, int index, FileFormat fileFormat) throws IOException {
+		final PrintStream ps = SecurityUtils.createPrintStream(os, true, StandardCharsets.UTF_8);
+		for (String line : ChartTxt.getLines(this, fileFormat == FileFormat.UTXT))
+			ps.println(line);
+		ps.flush();
+		return ImageDataSimple.ok();
 	}
 
 	@Override
