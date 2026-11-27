@@ -353,15 +353,15 @@ try {
 	ND_UF_parent(u, u);
 	ND_UF_size(u, 1);
     } else
-    UNSUPPORTED("35c97tyk6tzw1g527j6rp6xoo"); // 	u = UF_find(u);
+	u = UF_find(u); // 	u = UF_find(u);
     if (ND_UF_parent(v) == null) {
 	ND_UF_parent(v, v);
 	ND_UF_size(v, 1);
     } else
 	v = UF_find(v);
     if (ND_id(u) > ND_id(v)) {
-	UNSUPPORTED("2igr3ntnkm6svji4pbnjlp54e"); // 	ND_UF_parent(u) = v;
-	UNSUPPORTED("3lht90i6tvxbr10meir8nvcic"); // 	ND_UF_size(v) += ND_UF_size(u);
+	ND_UF_parent(u, v); // 	ND_UF_parent(u) = v;
+	ND_UF_size(v, ND_UF_size(v) + ND_UF_size(u)); // 	ND_UF_size(v) += ND_UF_size(u);
     } else {
 	ND_UF_parent(v, u);
 	ND_UF_size(u, ND_UF_size(u) + ND_UF_size(v));
@@ -807,7 +807,7 @@ UNSUPPORTED("c078bypfszv0nsvp1nc0x28wx"); // 	(((Agraphinfo_t*)(((Agobj_t*)(sg))
     ND_has_port(agtail(e), true);
     ED_tail_port(e, chkPort (zz, ND_shape(agtail(e)).fns.portfn, agtail(e), str));
     if (noClip(e, zz.E_tailclip))
-    UNSUPPORTED("cg4z67u0dm6h9nrcx8kkalnlt"); // 	ED_tail_port(e).clip = FALSE;
+    ED_tail_port(e).clip = false; // 	ED_tail_port(e).clip = FALSE;
     str = agget(zz, e, HEAD_ID);
     
     /* libgraph always defines tailport/headport; libcgraph doesn't */
@@ -816,7 +816,7 @@ UNSUPPORTED("c078bypfszv0nsvp1nc0x28wx"); // 	(((Agraphinfo_t*)(((Agobj_t*)(sg))
     ND_has_port(aghead(e), true);
     ED_head_port(e, chkPort(zz, ND_shape(aghead(e)).fns.portfn, aghead(e), str));
     if (noClip(e, zz.E_headclip))
-    UNSUPPORTED("ayqscz30ekhcje94wh4ib1hcu"); // 	ED_head_port(e).clip = FALSE;
+    ED_head_port(e).clip = false; // 	ED_head_port(e).clip = FALSE;
     return r;
 } finally {
 LEAVING("3aqh64lxwv4da2snfe7fvr45b","common_init_edge");

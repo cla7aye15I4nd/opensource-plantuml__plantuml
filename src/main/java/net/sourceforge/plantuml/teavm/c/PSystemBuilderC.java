@@ -61,6 +61,7 @@ import net.sourceforge.plantuml.error.PSystemErrorUtils;
 import net.sourceforge.plantuml.error.PSystemUnsupported;
 import net.sourceforge.plantuml.explain.Explanation;
 import net.sourceforge.plantuml.explain.PSystemExplain;
+import net.sourceforge.plantuml.filesdiagram.FilesDiagramFactory;
 import net.sourceforge.plantuml.gantt.GanttDiagramFactory;
 import net.sourceforge.plantuml.jaws.Jaws;
 import net.sourceforge.plantuml.jsondiagram.JsonDiagramFactory;
@@ -69,6 +70,7 @@ import net.sourceforge.plantuml.klimt.sprite.ListSpriteDiagramFactory;
 import net.sourceforge.plantuml.math.PSystemLatexFactory;
 import net.sourceforge.plantuml.math.PSystemMathFactory;
 import net.sourceforge.plantuml.mindmap.MindMapDiagramFactory;
+import net.sourceforge.plantuml.ngdot.PSystemNgDotFactory;
 import net.sourceforge.plantuml.nio.PathSystem;
 import net.sourceforge.plantuml.nwdiag.NwDiagramFactory;
 import net.sourceforge.plantuml.openiconic.PSystemListOpenIconicFactory;
@@ -109,6 +111,7 @@ public class PSystemBuilderC {
 		factories.add(new GanttDiagramFactory());
 		factories.add(new MindMapDiagramFactory());
 		factories.add(new WBSDiagramFactory());
+		factories.add(new PSystemNgDotFactory());
 		factories.add(new NwDiagramFactory());
 		// ::comment when __MIT__ __EPL__ __BSD__ __ASL__ __LGPL__
 		factories.add(new PSystemSudokuFactory());
@@ -120,6 +123,7 @@ public class PSystemBuilderC {
 		factories.add(new ChartDiagramFactory());
 		factories.add(new PacketDiagramFactory());
 		factories.add(new JsonDiagramFactory());
+		factories.add(new FilesDiagramFactory());
 		factories.add(new YamlDiagramFactory());
 		factories.add(new PSystemEbnfFactory());
 		factories.add(new PSystemRegexFactory());
